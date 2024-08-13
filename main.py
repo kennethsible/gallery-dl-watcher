@@ -23,7 +23,7 @@ def webhook(content: str):
     print('[INFO]', content)
     url = os.environ['WEBHOOK_URL']
     if len(url) > 0:
-        data = {"content": content}  # "username" : ""
+        data = {"content": '- ' + content}  # "username" : ""
         # data["embeds"] = [{"description" : "", "title" : ""}]
         result = requests.post(url, json=data)
         try:
@@ -39,19 +39,25 @@ def gallery_dl():
         config = json.load(config_f)
     print('[INFO] Monitoring Session Started.')
     for url in config:
-        path, users = config[url]
-        for user_id in users:
-            args = ' '.join(users[user_id])
-            dl_path = f'/downloads/{path}/{user_id}'
+        root_path, galleries = config[url]
+        for gallery in galleries:
             count_i = 0
-            if os.path.exists(dl_path):
-                count_i = len([x for x in os.listdir(dl_path) if os.path.isfile(dl_path + '/' + x)])
-            os.system(f'gallery-dl {url}{user_id} -d /downloads {args}')
-            count_str = ''
-            if os.path.exists(dl_path):
-                count_f = len([x for x in os.listdir(dl_path) if os.path.isfile(dl_path + '/' + x)])
-                count_str = str(count_f - count_i) + ' '
-            webhook(f'Downloaded {count_str}Image(s) from {path}/{user_id}.')
+            if os.path.exists(f'/downloads/{root_path}/{gallery}'):
+                count_i = len(os.listdir(f'/downloads/{root_path}/{gallery}'))
+            elif os.path.exists(f'/downloads/{root_path}'):
+                count_i = len(os.listdir(f'/downloads/{root_path}'))
+            os.system(f'gallery-dl {url}{gallery} -d /downloads {" ".join(galleries[gallery])}')
+            count_f = 0
+            if os.path.exists(f'/downloads/{root_path}/{gallery}'):
+                count_f = len(os.listdir(f'/downloads/{root_path}/{gallery}'))
+                residual = count_f - count_i
+                if residual > 0:
+                    webhook(f'Downloaded {residual} Image(s) from {root_path}/{gallery}.')
+            elif os.path.exists(f'/downloads/{root_path}'):
+                count_f = len(os.listdir(f'/downloads/{root_path}'))
+                residual = count_f - count_i
+                if residual > 0:
+                    webhook(f'Downloaded {residual} Collection(s) from {root_path}/{gallery}.')
     print('[INFO] Monitoring Session Finished.')
 
 
