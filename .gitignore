@@ -1,0 +1,8 @@
+__pycache__/
+.mypy_cache/
+.vscode/
+.venv/
+*.pyc
+*.ipynb
+.env
+downloads/

@@ -1,0 +1,12 @@
+{
+    "https://mangadex.org/title/":
+    [
+        "mangadex/Dandadan",
+        {
+            "68112dc1-2b80-4f20-beb8-2f2a8716a430": [
+                "--chapter-filter \"1 <= chapter <= 5\"",
+                "-o \"lang=en\""
+            ]
+        }
+    ]
+}

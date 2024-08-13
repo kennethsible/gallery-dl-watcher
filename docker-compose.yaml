@@ -1,0 +1,15 @@
+services:
+  gallery-dl-docker:
+    build:
+      network: host
+      context: .
+    container_name: gallery-dl-docker
+    environment:
+      - TZ=America/New_York  # OPTIONAL
+      - SCHEDULE_TIME=00:00  # OPTIONAL
+      - ONCE_ON_STARTUP=false # OPTIONAL
+      # - WEBHOOK_URL=https://discord.com/api/webhooks/${WEBHOOK_ID}/${DISCORD_TOKEN} # OPTIONAL
+    volumes:
+      - ./config.json:/gallery-dl/config.json
+      - ./downloads:/downloads
+    restart: unless-stopped
