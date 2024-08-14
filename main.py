@@ -19,25 +19,25 @@ import schedule
 #     return timestamp.strftime('%x %X')
 
 
-def webhook(content: str):
-    print('[INFO]', content)
+def webhook(message: str, gallery: str):
+    print(f'[INFO] {message} from {gallery}')
     url = os.environ['WEBHOOK_URL']
     if len(url) > 0:
-        data = {"content": '- ' + content}  # "username" : ""
-        # data["embeds"] = [{"description" : "", "title" : ""}]
+        message += f' from **{gallery}**.'
+        data = {"embeds": [{"description": message.lower(), "color": 1146986}]}
         result = requests.post(url, json=data)
         try:
             result.raise_for_status()
         except requests.exceptions.HTTPError as error:
             print('[ERROR]', error, file=sys.stderr)
         else:
-            print('[INFO] Webhook Status Code', result.status_code)
+            print('[INFO] Discord Webhook Sent')
 
 
 def gallery_dl():
     with open('gallery-dl/config.json') as config_f:
         config = json.load(config_f)
-    print('[INFO] Monitoring Session Started.')
+    print('[INFO] Monitoring Session Started')
     for url in config:
         root_path, galleries = config[url]
         for gallery in galleries:
@@ -52,17 +52,19 @@ def gallery_dl():
                 count_f = len(os.listdir(f'/downloads/{root_path}/{gallery}'))
                 residual = count_f - count_i
                 if residual > 0:
-                    webhook(f'Downloaded {residual} Image(s) from {root_path}/{gallery}.')
+                    suffix = 's' if residual > 1 else ''
+                    webhook(f'{residual} Image{suffix} Downloaded', f'{root_path}/{gallery}')
             elif os.path.exists(f'/downloads/{root_path}'):
                 count_f = len(os.listdir(f'/downloads/{root_path}'))
                 residual = count_f - count_i
                 if residual > 0:
-                    webhook(f'Downloaded {residual} Collection(s) from {root_path}/{gallery}.')
-    print('[INFO] Monitoring Session Finished.')
+                    suffix = 's' if residual > 1 else ''
+                    webhook(f'{residual} Collection{suffix} Downloaded', f'{root_path}/{gallery}')
+    print('[INFO] Monitoring Session Finished')
 
 
 def main():
-    print('[INFO] Application Initialized.')
+    print('[INFO] Application Initialized')
     if os.environ['ONCE_ON_STARTUP'] == 'true':
         gallery_dl()
     schedule_time = os.environ['SCHEDULE_TIME']
