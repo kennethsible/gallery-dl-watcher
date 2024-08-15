@@ -1,26 +1,17 @@
-# import datetime
 import json
+import logging
 import os
-import sys
+import subprocess
 import time
 
 import pytz
 import requests
 import schedule
 
-# https://discordapp.com/developers/docs/resources/webhook#execute-webhook
-# https://discordapp.com/developers/docs/resources/channel#embed-object
-
-
-# def timestamp() -> str:
-#     timestamp = datetime.datetime.now()
-#     tz = pytz.timezone(os.environ['TZ'])
-#     timestamp = timestamp.astimezone(tz)
-#     return timestamp.strftime('%x %X')
-
 
 def webhook(message: str, gallery: str):
-    print(f'[INFO] {message} from {gallery}')
+    # https://discordapp.com/developers/docs/resources/webhook#execute-webhook
+    # https://discordapp.com/developers/docs/resources/channel#embed-object
     url = os.environ['WEBHOOK_URL']
     if len(url) > 0:
         message += f' from **{gallery}**.'
@@ -28,43 +19,66 @@ def webhook(message: str, gallery: str):
         result = requests.post(url, json=data)
         try:
             result.raise_for_status()
-        except requests.exceptions.HTTPError as error:
-            print('[ERROR]', error, file=sys.stderr)
-        else:
-            print('[INFO] Discord Webhook Sent')
+        except requests.exceptions.HTTPError as http_error:
+            logging.error(http_error)
 
 
 def gallery_dl():
     with open('gallery-dl/config.json') as config_f:
         config = json.load(config_f)
-    print('[INFO] Monitoring Session Started')
+    logging.info('Monitoring Session Started')
     for url in config:
         root_path, galleries = config[url]
-        for gallery in galleries:
+        for gallery_id in galleries:
             count_i = 0
-            if os.path.exists(f'/downloads/{root_path}/{gallery}'):
-                count_i = len(os.listdir(f'/downloads/{root_path}/{gallery}'))
+            if os.path.exists(f'/downloads/{root_path}/{gallery_id}'):
+                count_i = len(os.listdir(f'/downloads/{root_path}/{gallery_id}'))
             elif os.path.exists(f'/downloads/{root_path}'):
                 count_i = len(os.listdir(f'/downloads/{root_path}'))
-            os.system(f'gallery-dl {url}{gallery} -d /downloads {" ".join(galleries[gallery])}')
+            cmd = f'gallery-dl {url}{gallery_id} -d /downloads {" ".join(galleries[gallery_id])}'
+            logging.info(f'Running `{cmd}`')
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            if result.stdout:
+                for output in result.stdout.strip().split('\n'):
+                    logging.debug(output)
+            if result.stderr:
+                for output in result.stderr.strip().split('\n'):
+                    logging.error(output)
             count_f = 0
-            if os.path.exists(f'/downloads/{root_path}/{gallery}'):
-                count_f = len(os.listdir(f'/downloads/{root_path}/{gallery}'))
-                residual = count_f - count_i
-                if residual > 0:
-                    suffix = 's' if residual > 1 else ''
-                    webhook(f'{residual} Image{suffix} Downloaded', f'{root_path}/{gallery}')
+            if os.path.exists(f'/downloads/{root_path}/{gallery_id}'):
+                count_f = len(os.listdir(f'/downloads/{root_path}/{gallery_id}'))
+                downloaded = count_f - count_i
+                suffix = 's' if downloaded != 1 else ''
+                message = f'{downloaded} Image{suffix} Downloaded'
             elif os.path.exists(f'/downloads/{root_path}'):
                 count_f = len(os.listdir(f'/downloads/{root_path}'))
-                residual = count_f - count_i
-                if residual > 0:
-                    suffix = 's' if residual > 1 else ''
-                    webhook(f'{residual} Collection{suffix} Downloaded', f'{root_path}/{gallery}')
-    print('[INFO] Monitoring Session Finished')
+                downloaded = count_f - count_i
+                suffix = 's' if downloaded != 1 else ''
+                message = f'{downloaded} Collection{suffix} Downloaded'
+            gallery = f'{root_path}/{gallery_id}'
+            logging.info(f'{message} from {gallery}')
+            if downloaded > 0:
+                webhook(message, gallery)
+    logging.info('Monitoring Session Finished')
 
 
 def main():
-    print('[INFO] Application Initialized')
+    logging.basicConfig(format='[%(levelname)s] %(message)s')
+    logger = logging.getLogger()
+    match os.environ['LOGGING_LEVEL']:
+        case 'debug':
+            logger.setLevel(logging.DEBUG)
+        case 'info':
+            logger.setLevel(logging.INFO)
+        case 'warning':
+            logger.setLevel(logging.WARNING)
+        case 'error':
+            logger.setLevel(logging.ERROR)
+        case 'critical':
+            logger.setLevel(logging.CRITICAL)
+    logging.info('Application Initialized')
+    logging.info('Logging Level Set to ' + os.environ['LOGGING_LEVEL'])
+    logging.info('Monitoring Scheduled for ' + os.environ['SCHEDULE_TIME'])
     if os.environ['ONCE_ON_STARTUP'] == 'true':
         gallery_dl()
     schedule_time = os.environ['SCHEDULE_TIME']

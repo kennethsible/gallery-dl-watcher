@@ -6,4 +6,6 @@ __pycache__/
 *.ipynb
 .env
 .DS_Store
+*.json
+*.yaml
 downloads/

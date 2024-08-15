@@ -8,11 +8,12 @@ services:
       network: host
       context: .
     container_name: gallery-dl-watcher
-    environment:
-      - TZ=America/New_York   # OPTIONAL
-      - SCHEDULE_TIME=00:00   # OPTIONAL
-      - ONCE_ON_STARTUP=false # OPTIONAL
-      # - WEBHOOK_URL=https://discord.com/api/webhooks/${WEBHOOK_ID}/${DISCORD_TOKEN} # OPTIONAL
+    # environment: # OPTIONAL
+    #   - TZ=America/New_York
+    #   - SCHEDULE_TIME=00:00
+    #   - LOGGING_LEVEL=debug
+    #   - ONCE_ON_STARTUP=false
+    #   - WEBHOOK_URL=https://discord.com/api/webhooks/${WEBHOOK_ID}/${DISCORD_TOKEN}
     volumes:
       - ./config.json:/gallery-dl/config.json
       - ./downloads:/downloads
@@ -26,8 +27,10 @@ services:
         "mangadex/Dandadan",
         {
             "68112dc1-2b80-4f20-beb8-2f2a8716a430": [
-                "--chapter-filter \"1 <= chapter <= 5\"",
-                "-o \"lang=en\""
+                "--chapter-filter",
+                "1 <= chapter <= 5",
+                "-o",
+                "lang=en"
             ]
         }
     ]
