@@ -17,7 +17,7 @@ services:
     volumes:
       - ./config.json:/gallery-dl/config.json
       - ./downloads:/downloads
-    restart: unless-stopped
+    restart: unless-stopped # OPTIONAL
 ```
 ## Configuration (Example)
 ```

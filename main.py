@@ -78,15 +78,17 @@ def main():
             logger.setLevel(logging.CRITICAL)
     logging.info('Application Initialized')
     logging.info('Logging Level Set to ' + os.environ['LOGGING_LEVEL'])
-    logging.info('Monitoring Scheduled for ' + os.environ['SCHEDULE_TIME'])
+    schedule_time = os.environ['SCHEDULE_TIME']
+    if schedule_time:
+        logging.info('Monitoring Scheduled for ' + os.environ['SCHEDULE_TIME'])
     if os.environ['ONCE_ON_STARTUP'] == 'true':
         gallery_dl()
-    schedule_time = os.environ['SCHEDULE_TIME']
-    tz = pytz.timezone(os.environ['TZ'])
-    schedule.every().day.at(schedule_time, tz).do(gallery_dl)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    if schedule_time:
+        tz = pytz.timezone(os.environ['TZ'])
+        schedule.every().day.at(schedule_time, tz).do(gallery_dl)
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
 
 if __name__ == '__main__':
