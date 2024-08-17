@@ -30,14 +30,15 @@ def gallery_dl():
     for url in config:
         root_path, galleries = config[url]
         for gallery_id in galleries:
+            args = galleries[gallery_id]
             count_i = 0
             if os.path.exists(f'/downloads/{root_path}/{gallery_id}'):
                 count_i = len(os.listdir(f'/downloads/{root_path}/{gallery_id}'))
             elif os.path.exists(f'/downloads/{root_path}'):
                 count_i = len(os.listdir(f'/downloads/{root_path}'))
-            cmd = f'gallery-dl {url}{gallery_id} -d /downloads {" ".join(galleries[gallery_id])}'
-            logging.info(f'Running `{cmd}`')
-            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            cmd = ['gallery-dl', url + gallery_id, '-d', '/downloads'] + args
+            logging.info('Running ' + str(cmd))
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.stdout:
                 for output in result.stdout.strip().split('\n'):
                     logging.debug(output)
