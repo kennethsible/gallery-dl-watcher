@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -21,12 +22,14 @@ from cron_descriptor import FormatError
 
 from gallerywatcher import __version__
 
-logger = logging.getLogger('gallery-watcher')
+process_logger = logging.getLogger('gallery-dl')
+watcher_logger = logging.getLogger('gallery-watcher')
 
 DISCORD_WEBHOOK = os.getenv('DISCORD_WEBHOOK')
 PUSHOVER_USER_KEY = os.getenv('PUSHOVER_USER_KEY')
 PUSHOVER_APP_TOKEN = os.getenv('PUSHOVER_APP_TOKEN')
 DOWNLOAD_DELAY = int(os.getenv('DOWNLOAD_DELAY', 3))
+DOWNLOAD_TIMEOUT = int(os.getenv('DOWNLOAD_TIMEOUT', 600))
 ONCE_ON_STARTUP = os.getenv('ONCE_ON_STARTUP', 'false').lower() in ('true', '1', 't')
 
 CRON_MACROS = {
@@ -40,6 +43,8 @@ CRON_MACROS = {
 }
 CRON_SCHEDULE = os.getenv('CRON_SCHEDULE')
 
+current_process: subprocess.Popen[str] | None = None
+
 
 def notify_discord(message: str, gallery_name: str, webhook_url: str) -> None:
     message = f'{message} from \n**{gallery_name}**'
@@ -48,7 +53,7 @@ def notify_discord(message: str, gallery_name: str, webhook_url: str) -> None:
     try:
         result.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        logger.error(f'upstream connection failed to Discord: {e}')
+        watcher_logger.error(f'upstream connection failed to Discord: {e}')
 
 
 def notify_pushover(message: str, gallery_name: str, user_key: str, app_token: str) -> None:
@@ -58,7 +63,7 @@ def notify_pushover(message: str, gallery_name: str, user_key: str, app_token: s
     try:
         result.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        logger.error(f'upstream connection failed to Pushover: {e}')
+        watcher_logger.error(f'upstream connection failed to Pushover: {e}')
 
 
 def extract_archive(gallery_path: Path) -> int:
@@ -68,7 +73,7 @@ def extract_archive(gallery_path: Path) -> int:
             continue
         if archive.suffix not in ('.zip', '.rar'):
             continue
-        logger.info(f'extracting {archive.name}')
+        watcher_logger.info(f'extracting {archive.name}')
 
         archive_stats = archive.stat()
         archive_mtime = archive_stats.st_mtime
@@ -101,18 +106,67 @@ def extract_archive(gallery_path: Path) -> int:
     return image_count
 
 
+def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
+    global current_process
+    image_count = 0
+    gallery_path: Path | None = None
+
+    try:
+        with subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        ) as process:
+            current_process = process
+
+            if process.stdout:
+                for line in process.stdout:
+                    if not (line := line.strip()):
+                        continue
+
+                    log_match = re.match(
+                        r'^\[.*?\]\[(debug|info|warning|error)\]', line, re.IGNORECASE
+                    )
+                    if log_match:
+                        match log_match.group(1).lower():
+                            case 'error':
+                                process_logger.error(line)
+                            case 'warning':
+                                process_logger.warning(line)
+                            case _:
+                                process_logger.debug(line)
+                        continue
+
+                    if not line.startswith('#'):
+                        output_path = Path(line)
+                        if gallery_path is None and output_path.is_file():
+                            gallery_path = output_path.parent
+                        image_count += 1
+
+            if (return_code := process.wait(timeout=DOWNLOAD_TIMEOUT)) != 0:
+                process_logger.error(f'exited with status {return_code}')
+
+    except subprocess.TimeoutExpired:
+        process_logger.error(f'timed out after {DOWNLOAD_TIMEOUT}s')
+        process.kill()
+    except Exception as e:
+        process_logger.error(f'unexpected error occurred: {e}')
+    finally:
+        current_process = None
+
+    return gallery_path, image_count
+
+
 def parse_domain(gallery_url: str) -> str:
     return urlparse(gallery_url).netloc.lstrip('www.').split('.')[0]
 
 
-def gallery_dl() -> None:
+def scan_galleries() -> None:
     with open('/config/config.json') as config_f:
         config = json.load(config_f)
 
     for gallery_url, galleries in config.items():
         for gallery_id, gallery_args in galleries.items():
             gallery_name = f'{parse_domain(gallery_url)}/{gallery_id}'
-            logger.info(f'scanning {gallery_name}')
+            watcher_logger.info(f'scanning {gallery_name}')
 
             args = ['gallery-dl', gallery_url + gallery_id] + gallery_args
             if '--directory' not in gallery_args:
@@ -120,31 +174,13 @@ def gallery_dl() -> None:
             if Path('/extractors').is_dir():
                 args.extend(['--extractors', '/extractors'])
             args.extend(['--config', '/config/gallery-dl.conf'])
-            try:
-                result = subprocess.run(args, capture_output=True, check=True, text=True)
-            except subprocess.CalledProcessError as e:
-                logger.error((e.stderr or e.stdout or str(e)).strip())
-                continue
+            gallery_path, image_count = run_gallery_dl(args)
 
-            image_count = 0
-            gallery_path: Path | None = None
-            if result.stdout:
-                for output in result.stdout.strip().split('\n'):
-                    if not output.startswith('#'):
-                        output_path = Path(output)
-                        if gallery_path is None and output_path.is_file():
-                            gallery_path = output_path.parent
-                        image_count += 1
-                        logger.debug(output)
-            if result.stderr:
-                for output in result.stderr.strip().split('\n'):
-                    logger.error(output)
-
-            if gallery_path:
+            if gallery_path and image_count > 0:
                 image_count += extract_archive(gallery_path)
                 suffix = 's' if image_count > 1 else ''
                 message = f'{image_count} image{suffix} downloaded'
-                logger.info(f'{message} from {gallery_name}')
+                watcher_logger.info(f'{message} from {gallery_name}')
 
                 if DISCORD_WEBHOOK:
                     notify_discord(message, gallery_name, DISCORD_WEBHOOK)
@@ -159,11 +195,13 @@ def main() -> None:
         level=logging.ERROR,
         format='[%(asctime)s %(levelname)s] [%(name)s] %(message)s',
     )
-    logger.setLevel(os.getenv('LOG_LEVEL', 'INFO').upper())
-    logger.info(f'Gallery Watcher {__version__}-{version("gallery-dl")}')
+    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    process_logger.setLevel(log_level)
+    watcher_logger.setLevel(log_level)
+    watcher_logger.info(f'Gallery Watcher {__version__}-{version("gallery-dl")}')
 
     if ONCE_ON_STARTUP:
-        gallery_dl()
+        scan_galleries()
     if expr := CRON_SCHEDULE:
         if expr.startswith('@'):
             macro = expr
@@ -182,12 +220,15 @@ def main() -> None:
             raise
 
         scheduler = BlockingScheduler()
-        scheduler.add_job(gallery_dl, trigger)
-        logger.info(f'scheduled task to run {expr_desc} ({timezone})')
+        scheduler.add_job(scan_galleries, trigger)
+        watcher_logger.info(f'scheduled task to run {expr_desc} ({timezone})')
 
         def handle_signal(signum: int, frame: FrameType | None) -> None:
             sig_name = signal.Signals(signum).name
-            logger.info(f'received {sig_name} signal')
+            watcher_logger.info(f'received {sig_name} signal')
+            if current_process:
+                watcher_logger.info('terminating gallery-dl subprocess')
+                current_process.terminate()
             scheduler.shutdown()
 
         signal.signal(signal.SIGTERM, handle_signal)
