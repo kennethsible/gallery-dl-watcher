@@ -5,10 +5,12 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
 from importlib.metadata import version
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import FrameType
 from urllib.parse import urlparse
@@ -22,15 +24,19 @@ from cron_descriptor import FormatError
 
 from gallerywatcher import __version__
 
-process_logger = logging.getLogger('gallery-dl')
-watcher_logger = logging.getLogger('gallery-watcher')
+downloader_logger = logging.getLogger('downloader')
+watcher_logger = logging.getLogger('watcher')
 
 DISCORD_WEBHOOK = os.getenv('DISCORD_WEBHOOK')
 PUSHOVER_USER_KEY = os.getenv('PUSHOVER_USER_KEY')
 PUSHOVER_APP_TOKEN = os.getenv('PUSHOVER_APP_TOKEN')
-DOWNLOAD_DELAY = int(os.getenv('DOWNLOAD_DELAY', 3))
-DOWNLOAD_TIMEOUT = int(os.getenv('DOWNLOAD_TIMEOUT', 600))
+DOWNLOAD_DELAY = int(os.getenv('DOWNLOAD_DELAY', '3'))
+DOWNLOAD_TIMEOUT = int(os.getenv('DOWNLOAD_TIMEOUT', '600'))
 ONCE_ON_STARTUP = os.getenv('ONCE_ON_STARTUP', 'false').lower() in ('true', '1', 't')
+LOG_LEVEL_DOWNLOADER = os.getenv('LOG_LEVEL_DOWNLOADER', '')
+LOG_LEVEL_WATCHER = os.getenv('LOG_LEVEL_WATCHER', '')
+LOG_MAX_BYTES = int(os.getenv('LOG_MAX_BYTES', str(5 * 1024 * 1024)))
+LOG_MAX_FILES = int(os.getenv('LOG_MAX_FILES', '3'))
 
 CRON_MACROS = {
     '@yearly': '0 0 1 1 *',
@@ -53,7 +59,7 @@ def notify_discord(message: str, gallery_name: str, webhook_url: str) -> None:
     try:
         result.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        watcher_logger.error(f'upstream connection failed to Discord: {e}')
+        watcher_logger.error(f'upstream connection error: {e}')
 
 
 def notify_pushover(message: str, gallery_name: str, user_key: str, app_token: str) -> None:
@@ -63,7 +69,7 @@ def notify_pushover(message: str, gallery_name: str, user_key: str, app_token: s
     try:
         result.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        watcher_logger.error(f'upstream connection failed to Pushover: {e}')
+        watcher_logger.error(f'upstream connection error: {e}')
 
 
 def extract_archive(gallery_path: Path) -> int:
@@ -126,13 +132,13 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
                         r'^\[.*?\]\[(debug|info|warning|error)\]', line, re.IGNORECASE
                     )
                     if log_match:
-                        match log_match.group(1).lower():
-                            case 'error':
-                                process_logger.error(line)
-                            case 'warning':
-                                process_logger.warning(line)
+                        match log_match.group(1).upper():
+                            case 'ERROR':
+                                downloader_logger.error(line)
+                            case 'WARNING':
+                                downloader_logger.warning(line)
                             case _:
-                                process_logger.debug(line)
+                                downloader_logger.debug(line)
                         continue
 
                     if not line.startswith('#'):
@@ -142,13 +148,14 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
                         image_count += 1
 
             if (return_code := process.wait(timeout=DOWNLOAD_TIMEOUT)) != 0:
-                process_logger.error(f'exited with status {return_code}')
+                downloader_logger.error(f'exited with status {return_code}')
 
     except subprocess.TimeoutExpired:
-        process_logger.error(f'timed out after {DOWNLOAD_TIMEOUT}s')
-        process.kill()
-    except Exception as e:
-        process_logger.error(f'unexpected error occurred: {e}')
+        downloader_logger.error(f'timed out after {DOWNLOAD_TIMEOUT}s')
+        if current_process is not None:
+            current_process.kill()
+    except Exception as e:  # noqa: BLE001
+        downloader_logger.error(f'unexpected error occurred: {e}')
     finally:
         current_process = None
 
@@ -156,7 +163,7 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
 
 
 def parse_domain(gallery_url: str) -> str:
-    return urlparse(gallery_url).netloc.lstrip('www.').split('.')[0]
+    return urlparse(gallery_url).netloc.removeprefix('www.').split('.')[0]
 
 
 def scan_galleries() -> None:
@@ -190,14 +197,39 @@ def scan_galleries() -> None:
                 time.sleep(DOWNLOAD_DELAY)
 
 
+def parse_log_level(level_str: str, default: int) -> int:
+    level_mapping = logging.getLevelNamesMapping()
+    return level_mapping.get(level_str.upper().strip(), default)
+
+
 def main() -> None:
-    logging.basicConfig(
-        level=logging.ERROR,
-        format='[%(asctime)s %(levelname)s] [%(name)s] %(message)s',
+    log_path = Path('/config/gallery-watcher.log')
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    downloader_level = parse_log_level(LOG_LEVEL_DOWNLOADER, logging.ERROR)
+    watcher_level = parse_log_level(LOG_LEVEL_WATCHER, logging.INFO)
+
+    def console_filter(record: logging.LogRecord) -> bool:
+        if record.name == downloader_logger.name:
+            return record.levelno >= downloader_level
+        if record.name == watcher_logger.name:
+            return record.levelno >= watcher_level
+        # return record.levelno >= logging.WARNING
+        return True
+
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_MAX_FILES, encoding='utf-8'
     )
-    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-    process_logger.setLevel(log_level)
-    watcher_logger.setLevel(log_level)
+    file_handler.setLevel(logging.DEBUG)
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.addFilter(console_filter)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='[%(asctime)s %(levelname)s] [%(name)s] %(message)s',
+        handlers=[file_handler, stream_handler],
+    )
+    logging.getLogger('apscheduler').setLevel(logging.ERROR)
+    logging.getLogger('urllib3').setLevel(logging.ERROR)
+
     watcher_logger.info(f'Gallery Watcher {__version__}-{version("gallery-dl")}')
 
     if ONCE_ON_STARTUP:

@@ -9,5 +9,5 @@ except importlib.metadata.PackageNotFoundError:
     try:
         with Path('/app/pyproject.toml').open('rb') as f:
             __version__ = tomllib.load(f)['project']['version']
-    except FileNotFoundError, KeyError:
+    except (FileNotFoundError, KeyError):
         pass

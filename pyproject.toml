@@ -4,17 +4,17 @@ version = "1.0.0"
 description = "Image Gallery Watcher & Downloader"
 license = { text = "MIT" }
 authors = [{ name = "Ken Sible", email = "ksible@outlook.com" }]
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.11"
 dependencies = [
-    "gallery-dl>=1.32.1",
-    "apscheduler>=3.11.2",
-    "cron_descriptor>=2.0.8",
+    "gallery-dl>=1.32.10",
+    "apscheduler>=3.11.3",
+    "cron_descriptor>=2.1.0",
     "requests>=2.34.2",
-    "rarfile>=4.2",
+    "rarfile>=4.5",
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.15.13", "mypy>=2.1.0", "types-requests"]
+dev = ["ruff>=0.16.5", "mypy>=2.3.1", "types-requests"]
 
 [project.urls]
 homepage = "https://github.com/kennethsible/gallery-dl-watcher"
@@ -30,8 +30,9 @@ quote-style = "single"
 
 [tool.mypy]
 strict = true
+exclude = ['^extractors/']
 ignore_missing_imports = true
 
 [build-system]
-requires = ["hatchling>=1.29.0"]
+requires = ["hatchling>=1.32.0"]
 build-backend = "hatchling.build"
