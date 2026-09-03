@@ -52,8 +52,8 @@ CRON_SCHEDULE = os.getenv('CRON_SCHEDULE')
 current_process: subprocess.Popen[str] | None = None
 
 
-def notify_discord(message: str, gallery_name: str, webhook_url: str) -> None:
-    message = f'{message} from \n**{gallery_name}**'
+def notify_discord(message: str, gallery: str, webhook_url: str) -> None:
+    message = f'{message} from \n**{gallery}**'
     data = {'embeds': [{'description': message, 'color': 1146986}]}
     result = requests.post(webhook_url, json=data)
     try:
@@ -62,8 +62,8 @@ def notify_discord(message: str, gallery_name: str, webhook_url: str) -> None:
         watcher_logger.error(f'upstream connection error: {e}')
 
 
-def notify_pushover(message: str, gallery_name: str, user_key: str, app_token: str) -> None:
-    message = f'{message} from <br><b>{gallery_name}</b>'
+def notify_pushover(message: str, gallery: str, user_key: str, app_token: str) -> None:
+    message = f'{message} from <br><b>{gallery}</b>'
     data = {'message': message, 'priority': -1, 'html': 1, 'token': app_token, 'user': user_key}
     result = requests.post('https://api.pushover.net/1/messages.json', json=data)
     try:
@@ -136,14 +136,16 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
                             case 'ERROR':
                                 downloader_logger.error(line)
                             case 'WARNING':
-                                downloader_logger.warning(line)
+                                if line.startswith('[download'):
+                                    downloader_logger.warning(line)
                             case _:
                                 downloader_logger.debug(line)
                         continue
 
                     if not line.startswith('#'):
+                        downloader_logger.debug(line)
                         output_path = Path(line)
-                        if gallery_path is None and output_path.is_file():
+                        if output_path.is_file() and gallery_path is None:
                             gallery_path = output_path.parent
                         image_count += 1
 
@@ -162,18 +164,36 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
     return gallery_path, image_count
 
 
+def get_gallery_name(gallery_url: str) -> str:
+    args = [
+        'gallery-dl',
+        '--simulate',
+        '--config',
+        '/config/gallery-dl.conf',
+        '--filter',
+        'print(username) or abort()',
+        gallery_url,
+    ]
+    if Path('/extractors').is_dir():
+        args.extend(['--extractors', '/extractors'])
+    result = subprocess.run(args, capture_output=True, check=False, text=True, timeout=30)
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return lines[0] if lines else 'Unknown Gallery'
+
+
 def parse_domain(gallery_url: str) -> str:
     return urlparse(gallery_url).netloc.removeprefix('www.').split('.')[0]
 
 
-def scan_galleries() -> None:
+def download_galleries() -> None:
     with open('/config/config.json') as config_f:
         config = json.load(config_f)
 
     for gallery_url, galleries in config.items():
         for gallery_id, gallery_args in galleries.items():
-            gallery_name = f'{parse_domain(gallery_url)}/{gallery_id}'
-            watcher_logger.info(f'scanning {gallery_name}')
+            gallery_name = get_gallery_name(gallery_url + gallery_id)
+            gallery = f'{parse_domain(gallery_url)}/{gallery_id} ({gallery_name})'
+            watcher_logger.info(f'scanning {gallery}')
 
             args = ['gallery-dl', gallery_url + gallery_id] + gallery_args
             if '--directory' not in gallery_args:
@@ -187,12 +207,12 @@ def scan_galleries() -> None:
                 image_count += extract_archive(gallery_path)
                 suffix = 's' if image_count > 1 else ''
                 message = f'{image_count} image{suffix} downloaded'
-                watcher_logger.info(f'{message} from {gallery_name}')
+                watcher_logger.info(f'{message} from {gallery}')
 
                 if DISCORD_WEBHOOK:
-                    notify_discord(message, gallery_name, DISCORD_WEBHOOK)
+                    notify_discord(message, gallery, DISCORD_WEBHOOK)
                 if PUSHOVER_USER_KEY and PUSHOVER_APP_TOKEN:
-                    notify_pushover(message, gallery_name, PUSHOVER_USER_KEY, PUSHOVER_APP_TOKEN)
+                    notify_pushover(message, gallery, PUSHOVER_USER_KEY, PUSHOVER_APP_TOKEN)
 
                 time.sleep(DOWNLOAD_DELAY)
 
@@ -213,8 +233,7 @@ def main() -> None:
             return record.levelno >= downloader_level
         if record.name == watcher_logger.name:
             return record.levelno >= watcher_level
-        # return record.levelno >= logging.WARNING
-        return True
+        return record.levelno >= logging.WARNING
 
     file_handler = RotatingFileHandler(
         log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_MAX_FILES, encoding='utf-8'
@@ -227,13 +246,13 @@ def main() -> None:
         format='[%(asctime)s %(levelname)s] [%(name)s] %(message)s',
         handlers=[file_handler, stream_handler],
     )
-    logging.getLogger('apscheduler').setLevel(logging.ERROR)
-    logging.getLogger('urllib3').setLevel(logging.ERROR)
+    for logger_name in ('apscheduler', 'cron_descriptor', 'urllib3'):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     watcher_logger.info(f'Gallery Watcher {__version__}-{version("gallery-dl")}')
 
     if ONCE_ON_STARTUP:
-        scan_galleries()
+        download_galleries()
     if expr := CRON_SCHEDULE:
         if expr.startswith('@'):
             macro = expr
@@ -252,7 +271,7 @@ def main() -> None:
             raise
 
         scheduler = BlockingScheduler()
-        scheduler.add_job(scan_galleries, trigger)
+        scheduler.add_job(download_galleries, trigger)
         watcher_logger.info(f'scheduled task to run {expr_desc} ({timezone})')
 
         def handle_signal(signum: int, frame: FrameType | None) -> None:
