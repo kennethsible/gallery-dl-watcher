@@ -19,6 +19,9 @@ dev = ["ruff>=0.16.5", "mypy>=2.3.1", "types-requests"]
 [project.urls]
 homepage = "https://github.com/kennethsible/gallery-dl-watcher"
 
+# [tool.uv.sources]
+# gallery-dl = { git = "https://codeberg.org/mikf/gallery-dl.git", rev = "" }
+
 [tool.ruff]
 line-length = 100
 

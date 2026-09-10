@@ -164,7 +164,7 @@ def run_gallery_dl(args: list[str]) -> tuple[Path | None, int]:
     return gallery_path, image_count
 
 
-def get_gallery_name(gallery_url: str) -> str:
+def get_gallery_name(gallery_url: str) -> str | None:
     args = [
         'gallery-dl',
         '--simulate',
@@ -177,8 +177,9 @@ def get_gallery_name(gallery_url: str) -> str:
     if Path('/extractors').is_dir():
         args.extend(['--extractors', '/extractors'])
     result = subprocess.run(args, capture_output=True, check=False, text=True, timeout=30)
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    return lines[0] if lines else 'Unknown Gallery'
+    if lines := [line.strip() for line in result.stdout.splitlines() if line.strip()]:
+        return lines[0]
+    return None
 
 
 def parse_domain(gallery_url: str) -> str:
@@ -191,8 +192,10 @@ def download_galleries() -> None:
 
     for gallery_url, galleries in config.items():
         for gallery_id, gallery_args in galleries.items():
-            gallery_name = get_gallery_name(gallery_url + gallery_id)
-            gallery = f'{parse_domain(gallery_url)}/{gallery_id} ({gallery_name})'
+            if gallery_name := get_gallery_name(gallery_url + gallery_id):
+                gallery = f'{parse_domain(gallery_url)}/{gallery_id} ({gallery_name})'
+            else:
+                gallery = f'{parse_domain(gallery_url)}/{gallery_id}'
             watcher_logger.info(f'scanning {gallery}')
 
             args = ['gallery-dl', gallery_url + gallery_id] + gallery_args
